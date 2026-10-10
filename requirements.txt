@@ -9,3 +9,5 @@ huggingface_hub==2.1.1
 pytest==8.4.2
 statsmodels
 seaborn
+xgboost
+optuna
