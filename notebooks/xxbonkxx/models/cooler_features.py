@@ -1,7 +1,16 @@
+from itertools import combinations
+
+import numpy as np
 import pandas as pd
 
-PROPERTY_TYPES = ["Condo Apt", "Detached", "Semi-Detached", "Condo Townhouse",
-                  "Freehold Townhouse", "Co-Op Apt"]
+PROPERTY_TYPES = [
+    "Condo Apt",
+    "Detached",
+    "Semi-Detached",
+    "Condo Townhouse",
+    "Freehold Townhouse",
+    "Co-Op Apt",
+]
 
 
 def square_feet(house_area):
@@ -12,28 +21,82 @@ def square_feet(house_area):
     high = pd.to_numeric(parts[1], errors="coerce").fillna(low)
     return (low + high) / 2
 
-def make_season(date):
+
+def make_months(df):
     """Return a season for a given date."""
-    month = date.dt.month
-    return pd.cut(month, bins=[0, 3, 6, 9, 12], labels=["Winter", "Spring", "Summer", "Fall"], right=True)
+    return df["date_listed"].dt.month
+
+
+def make_days(df):
+    """Return the number of days since January 1, 2021 for a given date."""
+    return (df["date_listed"] - pd.Timestamp("2021-01-01")).dt.days
+
+
+def make_years(df):
+    """Return the year for a given date."""
+    return df["date_listed"].dt.year
+
+
+def fillna_lots(df):
+    """Fill missing lot_front and lot_depth values with the median for that municipality."""
+    df["lot_front"] = df["lot_front"].fillna(0)
+    df["lot_depth"] = df["lot_depth"].fillna(0)
+    return df
+
+
+def oversample(df, feature, amount, seed=None):
+    """Bring every category of `feature` with fewer than `amount` rows up to `amount` rows
+    by adding copies of its rows, drawn with replacement. The original rows are kept.
+    Rows stay in their original order (listings is sorted by date_sold), with each copy
+    next to its original, so time-based splits still work. Only oversample training data."""
+    extra = [
+        group.sample(amount - len(group), replace=True, random_state=seed)
+        for _, group in df.groupby(feature, observed=True)
+        if len(group) < amount
+    ]
+    return pd.concat([df, *extra]).sort_index(kind="stable").reset_index(drop=True)
+
+
+def build_interaction_features(df: pd.DataFrame, features: list[str]) -> pd.DataFrame:
+    """Build interaction features for all pairs of features in `features`."""
+    df = df.copy()
+
+    for f1, f2 in combinations(features, 2):
+        col_name = f"{f1}_x_{f2}"
+
+        if isinstance(df[f1].dtype, pd.CategoricalDtype) or isinstance(
+            df[f2].dtype, pd.CategoricalDtype
+        ):
+            df[col_name] = (df[f1].astype(str) + "_" + df[f2].astype(str)).astype(
+                "category"
+            )
+        else:
+            df[col_name] = df[f1] * df[f2]
+
+    return df
+
 
 def off_market_features(homes):
     """Features for homes with no list price."""
     X = pd.DataFrame(index=homes.index)
-    X["square_feet"] = square_feet(homes["house_area"])
+    X["square_feet"] = np.log(square_feet(homes["house_area"]) + 1)
     X["bedrooms"] = homes["bedrooms"]
     X["washrooms"] = homes["washrooms"]
     X["parking"] = homes["parking_total"]
     X["lot_front"] = homes["lot_front"]
     X["lot_depth"] = homes["lot_depth"]
+    X = fillna_lots(X)
     X["latitude"] = homes["latitude"]
     X["longitude"] = homes["longitude"]
+    X["municipality"] = homes["municipality"].astype("category")
     # Months since January 2021, so the model can follow prices over time.
-    X["months"] = (homes["date_listed"] - pd.Timestamp("2021-01-01")).dt.days / 30.44
     X["community"] = homes["community"].astype("category")
     X["house_type"] = homes["house_type_name"].astype("category")
     X["house_style"] = homes["house_style"].astype("category")
-    X["season"] = make_season(homes["date_listed"])
+    X["month"] = make_months(homes)
+    X["year"] = make_years(homes)
+    X["day"] = make_days(homes)
+    X = build_interaction_features(X, list(X.columns))
     return X
 
 
