@@ -76,6 +76,18 @@ def build_interaction_features(df: pd.DataFrame, features: list[str]) -> pd.Data
     return df
 
 
+def fit_scaling_offset(groups: pd.Series, y_log: pd.Series) -> pd.Series:
+    """Median log target of each category minus the overall median log target.
+    Fit this on training rows only, then use apply_scaling_offset on any rows."""
+    overall_median = y_log.median()
+    return y_log.groupby(groups.astype(str)).median() - overall_median
+
+
+def apply_scaling_offset(groups: pd.Series, offset: pd.Series) -> np.ndarray:
+    """Offset of each row's category. Categories not seen when fitting get 0."""
+    return groups.astype(str).map(offset).fillna(0).to_numpy()
+
+
 def off_market_features(homes):
     """Features for homes with no list price."""
     X = pd.DataFrame(index=homes.index)
@@ -96,7 +108,7 @@ def off_market_features(homes):
     X["month"] = make_months(homes)
     X["year"] = make_years(homes)
     X["day"] = make_days(homes)
-    X = build_interaction_features(X, list(X.columns))
+    # X = build_interaction_features(X, list(X.columns))
     return X
 
 
