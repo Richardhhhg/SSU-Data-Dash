@@ -57,21 +57,44 @@ def oversample(df, feature, amount, seed=None):
     return pd.concat([df, *extra]).sort_index(kind="stable").reset_index(drop=True)
 
 
+def build_single_interaction_feature(df: pd.DataFrame, f1: str, f2: str) -> pd.Series:
+    """Build an interaction feature for two features f1 and f2."""
+    if isinstance(df[f1].dtype, pd.CategoricalDtype) and isinstance(
+        df[f2].dtype, pd.CategoricalDtype
+    ):
+        # Two categoricals: combine the categories
+        return (df[f1].astype(str) + "_" + df[f2].astype(str)).astype("category")
+    elif isinstance(df[f1].dtype, pd.CategoricalDtype) or isinstance(
+        df[f2].dtype, pd.CategoricalDtype
+    ):
+        # One categorical one numeric
+        # One hot encode the categorical and multiply by the numeric
+        cat_col = f1 if isinstance(df[f1].dtype, pd.CategoricalDtype) else f2
+        num_col = f2 if cat_col == f1 else f1
+        return pd.concat(
+            [
+                (df[cat_col] == cat).astype(int) * df[num_col]
+                for cat in df[cat_col].cat.categories
+            ],
+            axis=1,
+        )
+    else:
+        # Two numerics: multiply them
+        return df[f1] * df[f2]
+
+
 def build_interaction_features(df: pd.DataFrame, features: list[str]) -> pd.DataFrame:
     """Build interaction features for all pairs of features in `features`."""
     df = df.copy()
 
     for f1, f2 in combinations(features, 2):
-        col_name = f"{f1}_x_{f2}"
-
-        if isinstance(df[f1].dtype, pd.CategoricalDtype) or isinstance(
-            df[f2].dtype, pd.CategoricalDtype
-        ):
-            df[col_name] = (df[f1].astype(str) + "_" + df[f2].astype(str)).astype(
-                "category"
-            )
+        interaction_feature = build_single_interaction_feature(df, f1, f2)
+        if isinstance(interaction_feature, pd.DataFrame):
+            # One categorical and one numeric: add each column separately
+            for col in interaction_feature.columns:
+                df[f"{f1}_x_{f2}_{col}"] = interaction_feature[col]
         else:
-            df[col_name] = df[f1] * df[f2]
+            df[f"{f1}_x_{f2}"] = interaction_feature
 
     return df
 
@@ -86,6 +109,16 @@ def fit_scaling_offset(groups: pd.Series, y_log: pd.Series) -> pd.Series:
 def apply_scaling_offset(groups: pd.Series, offset: pd.Series) -> np.ndarray:
     """Offset of each row's category. Categories not seen when fitting get 0."""
     return groups.astype(str).map(offset).fillna(0).to_numpy()
+
+
+def make_is_apartment(df: pd.DataFrame) -> pd.Series:
+    def is_house_apartment(row):
+        if row["house_type_name"] in ["Co-op Apt", "Condo Apt", "Condo Townhouse"]:
+            return 1
+        else:
+            return 0
+
+    return df.apply(is_house_apartment, axis=1)
 
 
 def off_market_features(homes):
@@ -108,7 +141,16 @@ def off_market_features(homes):
     X["month"] = make_months(homes)
     X["year"] = make_years(homes)
     X["day"] = make_days(homes)
-    # X = build_interaction_features(X, list(X.columns))
+    X["is_apartment"] = make_is_apartment(homes).astype("category")
+    X = build_interaction_features(
+        X, ["is_apartment", "square_feet", "bedrooms", "washrooms", "parking"]
+    )
+    # interaction_columns = list(X.columns)
+    # interaction_columns.remove("community")
+    # X = build_interaction_features(
+    #     X,
+    #     interaction_columns,
+    # )
     return X
 
 
