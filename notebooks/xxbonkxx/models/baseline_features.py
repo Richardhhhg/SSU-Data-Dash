@@ -121,9 +121,15 @@ def make_is_apartment(df: pd.DataFrame) -> pd.Series:
     return df.apply(is_house_apartment, axis=1)
 
 
+def area_was_range(df: pd.DataFrame) -> pd.Series:
+    """Return a boolean series indicating whether the house_area was a range."""
+    return df["house_area"].astype(str).str.contains("-", regex=False)
+
+
 def off_market_features(homes):
     """Features for homes with no list price."""
     X = pd.DataFrame(index=homes.index)
+    X["house_area_was_range"] = area_was_range(homes).astype(int)
     X["square_feet"] = np.log(square_feet(homes["house_area"]) + 1)
     X["bedrooms"] = homes["bedrooms"]
     X["washrooms"] = homes["washrooms"]
