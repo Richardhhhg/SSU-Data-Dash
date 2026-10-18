@@ -126,17 +126,41 @@ def area_was_range(df: pd.DataFrame) -> pd.Series:
     return df["house_area"].astype(str).str.contains("-", regex=False)
 
 
+def make_price_per_sqft(df: pd.DataFrame) -> pd.Series:
+    """Return the price per square foot for each home."""
+    return df["sold_price"] / square_feet(df["house_area"])
+
+
+def make_lot_missing(df: pd.DataFrame) -> pd.Series:
+    """Return a boolean series indicating whether the lot_front or lot_depth is missing."""
+    return df["lot_front"].isna() | df["lot_depth"].isna()
+
+
+def add_lags(df: pd.DataFrame, target_name: str) -> pd.DataFrame:
+    df = df.copy()
+
+    target_df_daily = df.groupby("date_listed")[target_name].median()
+
+    df["lag_annual"] = (df["date_listed"] - pd.Timedelta(days=364)).map(target_df_daily)
+
+    df["lag_semi_annual"] = (df["date_listed"] - pd.Timedelta(days=182)).map(
+        target_df_daily
+    )
+
+    return df
+
+
 def off_market_features(homes):
     """Features for homes with no list price."""
     X = pd.DataFrame(index=homes.index)
     X["house_area_was_range"] = area_was_range(homes).astype(int)
-    X["square_feet"] = np.log(square_feet(homes["house_area"]) + 1)
+    X["square_feet"] = square_feet(homes["house_area"])
     X["bedrooms"] = homes["bedrooms"]
     X["washrooms"] = homes["washrooms"]
     X["parking"] = homes["parking_total"]
     X["lot_front"] = homes["lot_front"]
     X["lot_depth"] = homes["lot_depth"]
-    X = fillna_lots(X)
+    X["lot_missing"] = make_lot_missing(homes)
     X["latitude"] = homes["latitude"]
     X["longitude"] = homes["longitude"]
     X["municipality"] = homes["municipality"].astype("category")
@@ -144,19 +168,16 @@ def off_market_features(homes):
     X["community"] = homes["community"].astype("category")
     X["house_type"] = homes["house_type_name"].astype("category")
     X["house_style"] = homes["house_style"].astype("category")
+    X["is_apartment"] = make_is_apartment(homes).astype("category")
+
     X["month"] = make_months(homes)
     X["year"] = make_years(homes)
     X["day"] = make_days(homes)
-    X["is_apartment"] = make_is_apartment(homes).astype("category")
-    X = build_interaction_features(
-        X, ["is_apartment", "square_feet", "bedrooms", "washrooms", "parking"]
-    )
-    # interaction_columns = list(X.columns)
-    # interaction_columns.remove("community")
-    # X = build_interaction_features(
-    #     X,
-    #     interaction_columns,
-    # )
+
+    X["log_sold_price"] = np.log(homes["sold_price"])
+    X["date_listed"] = homes["date_listed"]
+    X = add_lags(X, "log_sold_price")
+    X.drop(columns=["log_sold_price", "date_listed"], inplace=True)
     return X
 
 
