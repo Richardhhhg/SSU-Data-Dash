@@ -44,7 +44,7 @@ def fillna_lots(df):
     return df
 
 
-def oversample(df, feature, amount, seed=None):
+def oversample_cat(df, feature, amount, seed=None):
     """Bring every category of `feature` with fewer than `amount` rows up to `amount` rows
     by adding copies of its rows, drawn with replacement. The original rows are kept.
     Rows stay in their original order (listings is sorted by date_sold), with each copy
@@ -55,6 +55,27 @@ def oversample(df, feature, amount, seed=None):
         if len(group) < amount
     ]
     return pd.concat([df, *extra]).sort_index(kind="stable").reset_index(drop=True)
+
+
+def oversample_num(df, feature, min_value, max_value, amount, seed=None):
+    """Add `amount` copies of rows whose `feature` is between `min_value` and `max_value`.
+
+    Bounds are inclusive. `min_value` None keeps every row at or below `max_value`, and
+    `max_value` None keeps every row at or above `min_value`. Copies are drawn with
+    replacement. The original rows are kept, and each copy stays next to its original
+    so time-based splits still work. Only oversample training data.
+    """
+    values = df[feature]
+    in_range = pd.Series(True, index=df.index)
+    if min_value is not None:
+        in_range &= values >= min_value
+    if max_value is not None:
+        in_range &= values <= max_value
+    group = df.loc[in_range]
+    if group.empty:
+        raise ValueError(f"No rows of {feature} fall in the requested range")
+    extra = group.sample(amount, replace=True, random_state=seed)
+    return pd.concat([df, extra]).sort_index(kind="stable").reset_index(drop=True)
 
 
 def build_single_interaction_feature(df: pd.DataFrame, f1: str, f2: str) -> pd.Series:
