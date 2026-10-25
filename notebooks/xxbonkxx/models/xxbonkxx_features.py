@@ -136,53 +136,147 @@ def make_lot_missing(df: pd.DataFrame) -> pd.Series:
     return df["lot_front"].isna() | df["lot_depth"].isna()
 
 
-def add_lags(df: pd.DataFrame, target_name: str) -> pd.DataFrame:
+def add_lags(
+    df: pd.DataFrame, target_name: str, history: pd.DataFrame | None = None
+) -> pd.DataFrame:
+    """Median of `target_name` by list date, lagged 182 and 364 days.
+
+    Medians come from `history` when given, otherwise from `df`. `df` still needs
+    `date_listed`. Pass the fold's training rows as history when featurizing rows
+    the model has not trained on.
+    """
     df = df.copy()
+    source = df if history is None else history
+    target_df_daily = source.groupby("date_listed")[target_name].median()
+    listed = df["date_listed"]
 
-    target_df_daily = df.groupby("date_listed")[target_name].median()
-
-    df["lag_annual"] = (df["date_listed"] - pd.Timedelta(days=364)).map(target_df_daily)
-
-    df["lag_semi_annual"] = (df["date_listed"] - pd.Timedelta(days=182)).map(
-        target_df_daily
-    )
-
+    df["lag_annual"] = (listed - pd.Timedelta(days=364)).map(target_df_daily)
+    df["lag_semi_annual"] = (listed - pd.Timedelta(days=182)).map(target_df_daily)
     return df
 
 
-def off_market_features(homes):
-    """Features for homes with no list price."""
+def add_month_cyclical(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    df["month_sin"] = np.sin(2 * np.pi * df["month"] / 12)
+    df["month_cos"] = np.cos(2 * np.pi * df["month"] / 12)
+    return df
+
+
+def make_total_rooms(df: pd.DataFrame) -> pd.Series:
+    return df["bedrooms"] + df["washrooms"] + df["parking_total"]
+
+
+def make_room_density(df: pd.DataFrame) -> pd.Series:
+    """Return the number of rooms per square foot."""
+    return make_total_rooms(df) / (square_feet(df["house_area"]) + 1)
+
+
+def make_bedroom_density(df: pd.DataFrame) -> pd.Series:
+    """Return the number of bedrooms per square foot."""
+    return df["bedrooms"] / (square_feet(df["house_area"]) + 1)
+
+
+def make_bathroom_density(df: pd.DataFrame) -> pd.Series:
+    """Return the number of bathrooms per square foot."""
+    return df["washrooms"] / (square_feet(df["house_area"]) + 1)
+
+
+def make_bedroom_to_bathroom_ratio(df: pd.DataFrame) -> pd.Series:
+    """Return the ratio of bedrooms to bathrooms."""
+    return df["bedrooms"] / (df["washrooms"] + 1)
+
+
+def make_median_price_per_sqft_by_community(df: pd.DataFrame) -> pd.Series:
+    """Return the median price per square foot for each community."""
+    price_per_sqft = make_price_per_sqft(df)
+    return df.groupby("community")["community"].transform(
+        lambda x: price_per_sqft[x.index].median()
+    )
+
+
+def log_sold_price_quantile(sold_price, reference_sold_price):
+    """Fraction of the reference sales whose log sold price is at or below each sale.
+
+    The result is in [0, 1]: 0 when a sale is cheaper than every reference sale, 1 when
+    it is at least as expensive as every reference sale. Build the reference from
+    training sales only, and score validation rows against that same reference.
+    """
+    log_reference = np.sort(np.log(np.asarray(reference_sold_price, dtype=float)))
+    log_price = np.log(np.asarray(sold_price, dtype=float))
+    return np.searchsorted(log_reference, log_price, side="right") / len(log_reference)
+
+
+def log_price_from_quantile(quantiles, reference_sold_price):
+    """Log sold price at each quantile of the reference sales.
+
+    Inverse of log_sold_price_quantile, interpolating between adjacent reference
+    prices. Quantiles outside [0, 1] are clipped, so this stays inside the cheapest
+    and most expensive reference sale.
+    """
+    log_reference = np.sort(np.log(np.asarray(reference_sold_price, dtype=float)))
+    n = len(log_reference)
+    quantiles = np.clip(np.asarray(quantiles, dtype=float), 0.0, 1.0)
+    position = np.clip(quantiles * n - 1.0, 0.0, n - 1.0)
+    lower = np.floor(position).astype(int)
+    upper = np.ceil(position).astype(int)
+    weight = position - lower
+    return log_reference[lower] * (1.0 - weight) + log_reference[upper] * weight
+
+
+def _lag_history(homes, history):
+    """Rows whose sold prices may be used for lags. Defaults to `homes`."""
+    source = homes if history is None else history
+    return pd.DataFrame(
+        {
+            "date_listed": source["date_listed"].to_numpy(),
+            "log_sold_price": np.log(source["sold_price"].to_numpy()),
+        }
+    )
+
+
+def off_market_features(homes, history=None):
+    """Features for homes with no list price.
+
+    `history` is the sales whose prices may be used for target-based features
+    (the lags). It defaults to `homes`. During cross validation, pass the fold's
+    training rows when building features for that fold's validation rows.
+    """
     X = pd.DataFrame(index=homes.index)
-    X["house_area_was_range"] = area_was_range(homes).astype(int)
+    # X["house_area_was_range"] = area_was_range(homes).astype(int)
     X["square_feet"] = square_feet(homes["house_area"])
     X["bedrooms"] = homes["bedrooms"]
     X["washrooms"] = homes["washrooms"]
     X["parking"] = homes["parking_total"]
     X["lot_front"] = homes["lot_front"]
     X["lot_depth"] = homes["lot_depth"]
-    X["lot_missing"] = make_lot_missing(homes)
+    # X["lot_missing"] = make_lot_missing(homes)
     X["latitude"] = homes["latitude"]
     X["longitude"] = homes["longitude"]
-    X["municipality"] = homes["municipality"].astype("category")
+    # X["municipality"] = homes["municipality"].astype("category")
     # Months since January 2021, so the model can follow prices over time.
     X["community"] = homes["community"].astype("category")
     X["house_type"] = homes["house_type_name"].astype("category")
     X["house_style"] = homes["house_style"].astype("category")
     X["is_apartment"] = make_is_apartment(homes).astype("category")
-
+    X["total_rooms"] = make_total_rooms(homes)
+    # X["room_density"] = make_room_density(homes)
+    X["bedroom_density"] = make_bedroom_density(homes)
+    X["bathroom_density"] = make_bathroom_density(homes)
+    X["bedroom_to_bathroom_ratio"] = make_bedroom_to_bathroom_ratio(homes)
     X["month"] = make_months(homes)
     X["year"] = make_years(homes)
     X["day"] = make_days(homes)
 
-    X["log_sold_price"] = np.log(homes["sold_price"])
+    X = add_month_cyclical(X)
+
     X["date_listed"] = homes["date_listed"]
-    X = add_lags(X, "log_sold_price")
-    X.drop(columns=["log_sold_price", "date_listed"], inplace=True)
+    X = add_lags(X, "log_sold_price", history=_lag_history(homes, history))
+    X.drop(columns=["date_listed"], inplace=True)
     return X
 
 
-def list_aware_features(homes):
+def list_aware_features(homes, history=None):
     """Features for homes that have a list price: everything above, plus the list price."""
-    X = off_market_features(homes)
+    X = off_market_features(homes, history=history)
     X["list_price"] = homes["list_price"]
     return X
