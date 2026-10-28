@@ -14,3 +14,7 @@ venv/
 .DS_Store
 .Rhistory
 report/*.pdf
+
+# Clutter from XxBonk Notebooks
+/notebooks/xxbonkxx/models/base_preds
+/notebooks/xxbonkxx/models/catboost_info
