@@ -624,14 +624,14 @@ def off_market_features(homes, history=None, window_days=182, predict_log_price=
     X["date_listed"] = homes["date_listed"]
     X = add_lags(X, "log_sold_price", history=_lag_history(homes, history))
     X.drop(columns=["date_listed"], inplace=True)
-    X = X.join(
-        community_features(
-            homes,
-            history=history,
-            window_days=window_days,
-            predict_log_price=predict_log_price,
-        )
-    )
+    # X = X.join(
+    #     community_features(
+    #         homes,
+    #         history=history,
+    #         window_days=window_days,
+    #         predict_log_price=predict_log_price,
+    #     )
+    # )
 
     keyword_features = make_remarks_keyword_features(homes)
     X = X.join(keyword_features)

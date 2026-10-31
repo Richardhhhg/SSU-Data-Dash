@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -6,6 +7,7 @@ import pandas as pd
 import data
 
 VALIDATION_MONTHS = pd.period_range("2025-12", "2026-05", freq="M")
+OOF_DIR = Path(__file__).parent / "oof_preds"
 
 
 def align_categories(X_tr, X_va):
@@ -139,3 +141,26 @@ class WalkForwardScorer:
             error = _percent_errors(predictions)
             self._scores[key] = (float(error.median()), float(error.mean()))
         return self._scores[key]
+
+
+def save_oof_predictions(name, *results):
+    """Save the walk-forward predictions of one base model for the meta model.
+
+    Every row was predicted by a model trained only on earlier months, so the meta
+    model can train on them. Writes OOF_DIR/<track>/<name>.parquet, overwriting any
+    earlier run of the same model.
+    """
+    predictions = pd.concat([result.predictions for result in results])
+    predictions = predictions.sort_values(["month", "ml_num"])
+    if predictions["ml_num"].duplicated().any():
+        raise ValueError("A home was predicted more than once; the months overlap.")
+    (track,) = predictions["track"].unique()
+    path = OOF_DIR / track / f"{name}.parquet"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    predictions.to_parquet(path)
+    months = predictions["month"]
+    print(
+        f"Saved {len(predictions):,} out-of-fold predictions "
+        f"({months.min()} to {months.max()}) to {path}"
+    )
+    return path
