@@ -9,18 +9,28 @@ deliberately simple, so you can measure how much your own ideas add.
 """
 import numpy as np
 from sklearn.ensemble import HistGradientBoostingRegressor
+from xgboost import XGBRegressor
 
 import features
 
+XGB_PARAMS = {
+    "n_estimators": 1000,
+    "learning_rate": 0.05,
+    "max_depth": 8,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "random_state": 0,
+}
 
 def make_model(track):
     """Return a fresh, untrained model for "off_market" or "list_aware"."""
     if track == "list_aware":
-        return ListPriceBaseline()
+        # return ListPriceBaseline()
         # return FeatureModel(features.list_aware_features)   # try this instead
-    return NearestSalesBaseline(k=10)
+        return XGBModel(features.list_aware_features, XGB_PARAMS)
+    # return NearestSalesBaseline(k=10)
     # return FeatureModel(features.off_market_features)       # try this instead
-
+    return XGBModel(features.off_market_features, XGB_PARAMS)
 
 class ListPriceBaseline:
     """List-aware baseline: every home sells for exactly its list price."""
@@ -90,3 +100,16 @@ class FeatureModel:
 
     def predict(self, homes):
         return np.exp(self.model.predict(self.make_features(homes)))
+
+
+class XGBModel:
+    def __init__(self, make_features, params):
+        self.make_features = make_features
+        self.model = XGBRegressor(**params)
+    def fit(self, train):
+        X = self.make_features(train)
+        self.model.fit(X, np.log(train["sold_price"]))
+        return self
+    def predict(self, homes):
+        X = self.make_features(homes)
+        return np.exp(self.model.predict(X))
