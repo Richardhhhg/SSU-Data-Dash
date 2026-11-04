@@ -143,7 +143,7 @@ def apply_scaling_offset(groups: pd.Series, offset: pd.Series) -> np.ndarray:
 
 def make_is_apartment(df: pd.DataFrame) -> pd.Series:
     def is_house_apartment(row):
-        if row["house_type_name"] in ["Co-op Apt", "Condo Apt", "Condo Townhouse"]:
+        if row["house_type_name"] in ["Co-Op Apt", "Condo Apt", "Condo Townhouse"]:
             return 1
         else:
             return 0
@@ -607,7 +607,9 @@ REPEAT_SALE_KEY = BUILDING_KEY + ["bedrooms", "washrooms", "house_area"]
 def _key(df, columns):
     """One string per row joining `columns`, rounding coordinates so floats match."""
     parts = [
-        df[c].round(6).astype(str) if c in ("latitude", "longitude") else df[c].astype(str)
+        df[c].round(6).astype(str)
+        if c in ("latitude", "longitude")
+        else df[c].astype(str)
         for c in columns
     ]
     return pd.Series(["|".join(row) for row in zip(*parts)], index=df.index)
@@ -622,13 +624,16 @@ def market_index(source, months):
             "house_type_name": source["house_type_name"].to_numpy(),
             "month": source["date_sold"].dt.to_period("M").to_numpy(),
             "lppsf": np.log(
-                source["sold_price"].to_numpy() / square_feet(source["house_area"]).to_numpy()
+                source["sold_price"].to_numpy()
+                / square_feet(source["house_area"]).to_numpy()
             ),
         }
     )
     monthly = sales.groupby(["month", "house_type_name"])["lppsf"].median().unstack()
     every_month = pd.period_range(
-        min(monthly.index.min(), months.min()), max(monthly.index.max(), months.max()), freq="M"
+        min(monthly.index.min(), months.min()),
+        max(monthly.index.max(), months.max()),
+        freq="M",
     )
     smoothed = monthly.reindex(every_month).rolling(3, min_periods=1).median().ffill()
     return smoothed.shift(1)  # the value for a month comes from the months before it
@@ -637,7 +642,9 @@ def market_index(source, months):
 def _index_at(index, house_types, months):
     """Look up `index` for each (house type, month) pair."""
     stacked = index.stack()
-    keys = pd.MultiIndex.from_arrays([pd.PeriodIndex(months, freq="M"), np.asarray(house_types)])
+    keys = pd.MultiIndex.from_arrays(
+        [pd.PeriodIndex(months, freq="M"), np.asarray(house_types)]
+    )
     return stacked.reindex(keys).to_numpy()
 
 
@@ -661,17 +668,33 @@ def building_features(homes, history=None):
     log_sqft = np.log(square_feet(homes["house_area"]))
 
     def earlier_sales(columns):
-        sales = pd.DataFrame(
-            {"key": _key(source, columns), "date_sold": source["date_sold"], "detrended": detrended}
-        ).dropna(subset=["detrended"]).sort_values("date_sold")
+        sales = (
+            pd.DataFrame(
+                {
+                    "key": _key(source, columns),
+                    "date_sold": source["date_sold"],
+                    "detrended": detrended,
+                }
+            )
+            .dropna(subset=["detrended"])
+            .sort_values("date_sold")
+        )
         grouped = sales.groupby("key")["detrended"]
         sales["mean"] = grouped.cumsum() / (grouped.cumcount() + 1)
         sales["count"] = grouped.cumcount() + 1
         queries = pd.DataFrame(
-            {"key": _key(homes, columns), "date_listed": homes["date_listed"], "row": np.arange(len(homes))}
+            {
+                "key": _key(homes, columns),
+                "date_listed": homes["date_listed"],
+                "row": np.arange(len(homes)),
+            }
         ).sort_values("date_listed")
         matched = pd.merge_asof(
-            queries, sales, left_on="date_listed", right_on="date_sold", by="key",
+            queries,
+            sales,
+            left_on="date_listed",
+            right_on="date_sold",
+            by="key",
             allow_exact_matches=False,  # sold strictly before the home was listed
         )
         return matched.sort_values("row").set_index(homes.index)
@@ -682,11 +705,15 @@ def building_features(homes, history=None):
     X["building_log_ppsf"] = (building["mean"] + level_now).to_numpy()
     X["building_log_price"] = X["building_log_ppsf"] + log_sqft
     X["building_last_log_ppsf"] = (building["detrended"] + level_now).to_numpy()
-    X["building_days_since_sale"] = (building["date_listed"] - building["date_sold"]).dt.days.to_numpy()
+    X["building_days_since_sale"] = (
+        building["date_listed"] - building["date_sold"]
+    ).dt.days.to_numpy()
 
     repeat = earlier_sales(REPEAT_SALE_KEY)
     X["repeat_log_price"] = (repeat["detrended"] + level_now).to_numpy() + log_sqft
-    X["repeat_days_since_sale"] = (repeat["date_listed"] - repeat["date_sold"]).dt.days.to_numpy()
+    X["repeat_days_since_sale"] = (
+        repeat["date_listed"] - repeat["date_sold"]
+    ).dt.days.to_numpy()
     return X
 
 
@@ -710,7 +737,12 @@ def smooth_lags(homes, history=None, window_days=30, min_sales=5):
     for name, lag_days in [("lag_annual", 364), ("lag_semi_annual", 182)]:
         window_end = homes["date_listed"] - pd.Timedelta(days=lag_days) + half
         X[name] = point_in_time_median(
-            known, "house_type_name", homes["house_type_name"], window_end, window_days, min_sales
+            known,
+            "house_type_name",
+            homes["house_type_name"],
+            window_end,
+            window_days,
+            min_sales,
         )
     return X
 
