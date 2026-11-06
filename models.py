@@ -55,13 +55,11 @@ CATBOOST_PARAMS = {
     "one_hot_max_size": 7,
 }
 
-# colsample_bytree and feature_fraction are the same setting; LightGBM uses feature_fraction.
 LIGHTGBM_PARAMS = {
     "learning_rate": 0.08,
     "num_leaves": 160,
     "max_depth": 12,
     "n_estimators": 1000,
-    "colsample_bytree": 1.0,
     "min_child_samples": 43,
     "min_split_gain": 0.0,
     "reg_lambda": 0.00691982217304558,
@@ -93,9 +91,95 @@ LIGHTGBM_HOUSE_PARAMS = {
     "reg_alpha": 0.5155994576469242,
 }
 
+AWARE_XGBOOST_PARAMS = {
+    "learning_rate": 0.02,
+    "max_depth": 13,
+    "n_estimators": 1200,
+    "subsample": 0.7000000000000001,
+    "colsample_bytree": 0.9,
+    "max_bin": 1523,
+    "min_child_weight": 5,
+    "gamma": 0.01,
+    "reg_lambda": 0.09067060845188568,
+    "reg_alpha": 2.1221007442196798,
+    "max_delta_step": 7,
+}
+
+AWARE_CATBOOST_PARAMS = {
+    "learning_rate": 0.05,
+    "depth": 10,
+    "iterations": 2000,
+    "l2_leaf_reg": 4.809832193856093,
+    "random_strength": 3.0009335320617767,
+    "subsample": 0.9,
+    "border_count": 254,
+    "one_hot_max_size": 9,
+}
+
+AWARE_LIGHTGBM_PARAMS = {
+    "learning_rate": 0.04,
+    "num_leaves": 235,
+    "max_depth": 6,
+    "n_estimators": 2000,
+    "colsample_bytree": 0.30000000000000004,
+    "min_child_samples": 22,
+    "min_split_gain": 0.0,
+    "reg_lambda": 0.824461364065615,
+    "reg_alpha": 0.005510621165738579,
+}
+
+AWARE_LIGHTGBM_APARTMENT_PARAMS = {
+    "learning_rate": 0.060000000000000005,
+    "num_leaves": 49,
+    "max_depth": 13,
+    "n_estimators": 1000,
+    "colsample_bytree": 0.8,
+    "min_child_samples": 82,
+    "min_split_gain": 0.0,
+    "reg_lambda": 0.6933877086258585,
+    "reg_alpha": 0.01197099282824542,
+}
+
+AWARE_LIGHTGBM_HOUSE_PARAMS = {
+    "learning_rate": 0.03,
+    "num_leaves": 212,
+    "max_depth": 6,
+    "n_estimators": 1800,
+    "colsample_bytree": 0.5,
+    "min_child_samples": 25,
+    "min_split_gain": 0.0,
+    "reg_lambda": 0.05107704444922434,
+    "reg_alpha": 2.8015668038585706,
+}
+
 META_MONTHS = 6  # months of out-of-fold predictions the meta model learns from
-META_ALPHA = 1.931  # ridge penalty chosen by RidgeCV in meta_training.ipynb
-VERBOSE = True  # print how long each model takes to train
+META_ALPHA = 1.931
+AWARE_META_ALPHA = 0.3728
+
+TRACK_PARAMS = {
+    "off_market": {
+        "xgboost": XGBOOST_PARAMS,
+        "catboost": CATBOOST_PARAMS,
+        "lightgbm": LIGHTGBM_PARAMS,
+        "lightgbm_split_apartment": {
+            1: LIGHTGBM_APARTMENT_PARAMS,
+            0: LIGHTGBM_HOUSE_PARAMS,
+        },
+        "meta_alpha": META_ALPHA,
+    },
+    "list_aware": {
+        "xgboost": AWARE_XGBOOST_PARAMS,
+        "catboost": AWARE_CATBOOST_PARAMS,
+        "lightgbm": AWARE_LIGHTGBM_PARAMS,
+        "lightgbm_split_apartment": {
+            1: AWARE_LIGHTGBM_APARTMENT_PARAMS,
+            0: AWARE_LIGHTGBM_HOUSE_PARAMS,
+        },
+        "meta_alpha": AWARE_META_ALPHA,
+    },
+}
+
+VERBOSE = True
 
 
 def log(message):
@@ -178,17 +262,9 @@ class NearestSalesBaseline:
 
 
 class TreeModel:
-    """What the gradient-boosted tree models below share.
-
-    They learn log(price) rather than price, so a 10% miss on a cheap condo counts
-    as much as a 10% miss on an expensive house. The training sales are kept, because
-    the features of the homes to value (price lags, earlier sales in the same building,
-    the remarks text score) are worked out from them. Each model only says which
-    regressor it trains, in new_regressor().
-    """
-
-    def __init__(self, make_features):
+    def __init__(self, make_features, params):
         self.make_features = make_features
+        self.params = params
 
     def fit(self, train):
         X, y = self.training_features(train)
@@ -199,9 +275,6 @@ class TreeModel:
         return np.exp(self.regressor.predict(self.features_to_value(homes)))
 
     def training_features(self, train):
-        """Features and log sold prices of the training sales. Remembers the sales and
-        the categories seen in them, for features_to_value(), and how long building
-        the features took, for the timing log."""
         self.train = train
         start = time.perf_counter()
         X = self.make_features(train)
@@ -209,41 +282,32 @@ class TreeModel:
         self.categories = {
             column: X[column].cat.categories for column in X.select_dtypes("category")
         }
-        return self.prepare(X), np.log(train["sold_price"])
+        return self.set_categorical_columns(X), np.log(train["sold_price"])
 
     def features_to_value(self, homes):
-        """Features of homes to value, worked out from the training sales."""
-        return self.prepare(self.make_features(homes, history=self.train))
+        return self.set_categorical_columns(
+            self.make_features(homes, history=self.train)
+        )
 
-    def prepare(self, X):
-        """Give the categorical columns the categories of the training sales, so a code
-        means the same category in training and prediction. Unseen values become missing."""
+    def set_categorical_columns(self, X):
         for column, categories in self.categories.items():
             X[column] = X[column].cat.set_categories(categories)
         return X
 
 
 class XGBoostModel(TreeModel):
-    """XGBoost on the features in features.py, reading the categorical columns natively."""
-
     def new_regressor(self):
         return XGBRegressor(
-            **XGBOOST_PARAMS, enable_categorical=True, device="cpu", random_state=SEED
+            **self.params, enable_categorical=True, device="cpu", random_state=SEED
         )
 
 
 class CatBoostModel(TreeModel):
-    """CatBoost on the features in features.py.
-
-    CatBoost wants its categorical columns as text, and rejects missing values in them,
-    so missing values become "missing".
-    """
-
     CATEGORICAL_COLUMNS = ["community", "house_type", "house_style", "is_apartment"]
 
     def new_regressor(self):
         return CatBoostRegressor(
-            **CATBOOST_PARAMS,
+            **self.params,
             loss_function="RMSE",
             eval_metric="MAE",
             bootstrap_type="Bernoulli",  # lets subsample work on both CPU and GPU
@@ -261,28 +325,15 @@ class CatBoostModel(TreeModel):
 
 
 class LightGBMModel(TreeModel):
-    """LightGBM on the features in features.py, reading the categorical columns natively."""
-
     def new_regressor(self):
-        return LGBMRegressor(**LIGHTGBM_PARAMS, random_seed=SEED, verbosity=-1)
+        return LGBMRegressor(**self.params, random_seed=SEED, verbosity=-1)
 
 
 class LightGBMSplitApartmentModel(TreeModel):
-    """Two LightGBM models: one trained only on apartments (condo apartments, co-op
-    apartments and condo townhouses), one only on houses. Each home is priced by the
-    model of its own kind.
-
-    Both use the features in features.py, built on all the training sales, so price
-    lags and the remarks text score still learn from both kinds. The is_apartment
-    columns are dropped, as they are the same for every home a model sees.
-    """
-
-    PARAMS = {1: LIGHTGBM_APARTMENT_PARAMS, 0: LIGHTGBM_HOUSE_PARAMS}  # by is_apartment
-
     def fit(self, train):
         X, y = self.training_features(train)
         self.regressors = {}
-        for flag, params in self.PARAMS.items():
+        for flag, params in self.params.items():
             rows = X["is_apartment"] == flag
             regressor = LGBMRegressor(
                 **params, subsample_freq=1, random_state=SEED, verbosity=-1
@@ -313,26 +364,19 @@ class LightGBMSplitApartmentModel(TreeModel):
 
 
 class MetaModel:
-    """A ridge regression stacking the four tree models' predictions of log(price).
-
-    The ridge must learn how far to trust each tree model from predictions on sales
-    the tree models never saw. So each of the META_MONTHS months before the end of the
-    training sales is predicted the way `python run.py validate` predicts a month: by
-    tree models trained only on the sales before that month, with the answers hidden.
-    The ridge learns from those predictions, then the tree models are trained again on
-    every training sale to price the homes to value.
-    """
-
     def __init__(self, track):
         self.track = track
 
     def new_base_models(self):
         make_features = make_features_for(self.track)
+        params = TRACK_PARAMS[self.track]
         return {
-            "xgboost": XGBoostModel(make_features),
-            "catboost": CatBoostModel(make_features),
-            "lightgbm": LightGBMModel(make_features),
-            "lightgbm_split_apartment": LightGBMSplitApartmentModel(make_features),
+            "xgboost": XGBoostModel(make_features, params["xgboost"]),
+            "catboost": CatBoostModel(make_features, params["catboost"]),
+            "lightgbm": LightGBMModel(make_features, params["lightgbm"]),
+            "lightgbm_split_apartment": LightGBMSplitApartmentModel(
+                make_features, params["lightgbm_split_apartment"]
+            ),
         }
 
     def fit(self, train):
@@ -351,7 +395,7 @@ class MetaModel:
             )
             log_prices.append(np.log(homes["sold_price"]))
 
-        self.ridge = Ridge(alpha=META_ALPHA).fit(
+        self.ridge = Ridge(alpha=TRACK_PARAMS[self.track]["meta_alpha"]).fit(
             pd.concat(log_predictions), pd.concat(log_prices)
         )
         self.base_models = self.fit_base_models(train, "final")
@@ -364,7 +408,6 @@ class MetaModel:
         )
 
     def fit_base_models(self, train, label):
-        """Train every tree model on `train`. `label` names this step in the timing log."""
         base_models = {}
         for name, model in self.new_base_models().items():
             start = time.perf_counter()
@@ -379,7 +422,6 @@ class MetaModel:
 
     @staticmethod
     def base_log_predictions(base_models, homes):
-        """One column of log price predictions per tree model, one row per home."""
         return pd.DataFrame(
             {name: np.log(model.predict(homes)) for name, model in base_models.items()},
             index=homes.index,

@@ -1,4 +1,3 @@
-import numpy as np
 import pandas as pd
 
 
@@ -16,8 +15,6 @@ def _report(all_features, selected, label, select_on, report_on):
 
 
 def feature_importances(scorer):
-    """Importances of fit_model trained on the earliest selection fold's training
-    sales, so the ranking never sees a month that either scorer predicts."""
     fold = scorer.folds[0]
     model = scorer.fit_model(fold.X_train, fold.y_train)
     return pd.Series(
@@ -26,7 +23,6 @@ def feature_importances(scorer):
 
 
 def select_top_k_features(select_on, k, report_on=None):
-    """Keep the k most important features and compare them with all features, month by month."""
     importances = feature_importances(select_on)
     all_features = list(importances.index)
     top_k_features = list(importances.index[:k])
@@ -39,12 +35,6 @@ def select_top_k_features(select_on, k, report_on=None):
 def backward_feature_elimination(
     select_on, report_on=None, features=None, max_rounds=None
 ):
-    """Repeatedly drop the feature whose removal most lowers walk-forward MdAPE on
-    `select_on`; stop when no removal helps (or after max_rounds removals).
-
-    Each round refits one model per month for every remaining feature, so a round
-    costs len(features) * len(select_on.folds) fits.
-    """
     current_features = list(
         select_on.folds[0].X_train.columns if features is None else features
     )

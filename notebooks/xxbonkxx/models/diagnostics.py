@@ -1,10 +1,3 @@
-"""Plots and tables for finding where a model's predictions go wrong.
-
-Every function takes the actual and predicted sale prices in dollars, so it works for
-any model, track or feature set. Residuals are percentage errors,
-100 * (predicted - actual) / actual: above 0 means the model predicted too high.
-"""
-
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
@@ -50,10 +43,6 @@ def plot_predicted_vs_actual(actual, predicted):
 def plot_residuals_by_feature(
     X, actual, predicted, min_num_cat=10, max_categories=20, n_cols=3
 ):
-    """One panel per column of X: a scatter plot for continuous columns and a box plot
-    for categorical ones. Numeric columns with at most max_categories distinct values
-    (bedrooms, month, ...) count as categorical. Columns with more categories than that
-    show only their max_categories most common values."""
     residual = percent_error(actual, predicted)
     n_rows = int(np.ceil(len(X.columns) / n_cols))
     fig, axes = plt.subplots(
@@ -81,7 +70,6 @@ def plot_residuals_by_feature(
 
 
 def worst_predictions(homes, actual, predicted, n=20):
-    """The n homes with the largest absolute percentage error."""
     table = homes.assign(
         actual_price=np.asarray(actual),
         predicted_price=np.round(predicted),

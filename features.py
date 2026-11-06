@@ -1,17 +1,3 @@
-"""Turn a table of homes into numbers a model can learn from.
-
-Each function gets a table of homes with the columns of its test file (so never
-sold_price or date_sold) and returns a table of numbers, one row per home.
-
-Some features are worked out from past sales: price lags, earlier sales in the same
-building and a text model of the remarks. Those sales come from `history`:
-
-    off_market_features(train)                   training sales, which describe themselves
-    off_market_features(homes, history=train)    homes to value, described by the training sales
-
-so the homes being valued never inform their own features. The models in models.py
-use these functions.
-"""
 import re
 from collections import OrderedDict
 
@@ -44,9 +30,11 @@ def add_size_interactions(X):
     then every pair of size columns multiplied together."""
     for column in SIZE_COLUMNS:
         for flag in [0, 1]:
-            X[f"is_apartment_x_{column}_{flag}"] = (X["is_apartment"] == flag).astype(int) * X[column]
+            X[f"is_apartment_x_{column}_{flag}"] = (X["is_apartment"] == flag).astype(
+                int
+            ) * X[column]
     for i, first in enumerate(SIZE_COLUMNS):
-        for second in SIZE_COLUMNS[i + 1:]:
+        for second in SIZE_COLUMNS[i + 1 :]:
             X[f"{first}_x_{second}"] = X[first] * X[second]
     return X
 
@@ -59,7 +47,9 @@ def price_lags(homes, history=None):
     daily_median = np.log(source["sold_price"]).groupby(source["date_listed"]).median()
     X = pd.DataFrame(index=homes.index)
     X["lag_annual"] = (homes["date_listed"] - pd.Timedelta(days=364)).map(daily_median)
-    X["lag_semi_annual"] = (homes["date_listed"] - pd.Timedelta(days=182)).map(daily_median)
+    X["lag_semi_annual"] = (homes["date_listed"] - pd.Timedelta(days=182)).map(
+        daily_median
+    )
     return X
 
 
@@ -75,7 +65,9 @@ REPEAT_SALE_KEY = BUILDING_KEY + ["bedrooms", "washrooms", "house_area"]
 def _key(df, columns):
     """One string per row joining `columns`, rounding coordinates so floats match."""
     parts = [
-        df[c].round(6).astype(str) if c in ("latitude", "longitude") else df[c].astype(str)
+        df[c].round(6).astype(str)
+        if c in ("latitude", "longitude")
+        else df[c].astype(str)
         for c in columns
     ]
     return pd.Series(["|".join(row) for row in zip(*parts)], index=df.index)
@@ -85,14 +77,21 @@ def market_index(source, months):
     """Median log price per square foot of each property type, by month, as known at the
     start of each month in `months`: every value uses only sales of earlier months.
     Smoothed over three months, and carried forward through months with no sales."""
-    sales = pd.DataFrame({
-        "house_type_name": source["house_type_name"].to_numpy(),
-        "month": source["date_sold"].dt.to_period("M").to_numpy(),
-        "lppsf": np.log(source["sold_price"].to_numpy() / square_feet(source["house_area"]).to_numpy()),
-    })
+    sales = pd.DataFrame(
+        {
+            "house_type_name": source["house_type_name"].to_numpy(),
+            "month": source["date_sold"].dt.to_period("M").to_numpy(),
+            "lppsf": np.log(
+                source["sold_price"].to_numpy()
+                / square_feet(source["house_area"]).to_numpy()
+            ),
+        }
+    )
     monthly = sales.groupby(["month", "house_type_name"])["lppsf"].median().unstack()
     every_month = pd.period_range(
-        min(monthly.index.min(), months.min()), max(monthly.index.max(), months.max()), freq="M"
+        min(monthly.index.min(), months.min()),
+        max(monthly.index.max(), months.max()),
+        freq="M",
     )
     smoothed = monthly.reindex(every_month).rolling(3, min_periods=1).median().ffill()
     return smoothed.shift(1)  # the value for a month comes from the months before it
@@ -100,7 +99,9 @@ def market_index(source, months):
 
 def _index_at(index, house_types, months):
     """Look up `index` for each (house type, month) pair."""
-    keys = pd.MultiIndex.from_arrays([pd.PeriodIndex(months, freq="M"), np.asarray(house_types)])
+    keys = pd.MultiIndex.from_arrays(
+        [pd.PeriodIndex(months, freq="M"), np.asarray(house_types)]
+    )
     return index.stack().reindex(keys).to_numpy()
 
 
@@ -125,21 +126,32 @@ def building_features(homes, history=None):
 
     def earlier_sales(columns):
         sales = (
-            pd.DataFrame({"key": _key(source, columns), "date_sold": source["date_sold"],
-                          "detrended": detrended})
+            pd.DataFrame(
+                {
+                    "key": _key(source, columns),
+                    "date_sold": source["date_sold"],
+                    "detrended": detrended,
+                }
+            )
             .dropna(subset=["detrended"])
             .sort_values("date_sold")
         )
         grouped = sales.groupby("key")["detrended"]
         sales["mean"] = grouped.cumsum() / (grouped.cumcount() + 1)
         sales["count"] = grouped.cumcount() + 1
-        queries = pd.DataFrame({
-            "key": _key(homes, columns),
-            "date_listed": homes["date_listed"],
-            "row": np.arange(len(homes)),
-        }).sort_values("date_listed")
+        queries = pd.DataFrame(
+            {
+                "key": _key(homes, columns),
+                "date_listed": homes["date_listed"],
+                "row": np.arange(len(homes)),
+            }
+        ).sort_values("date_listed")
         matched = pd.merge_asof(
-            queries, sales, left_on="date_listed", right_on="date_sold", by="key",
+            queries,
+            sales,
+            left_on="date_listed",
+            right_on="date_sold",
+            by="key",
             allow_exact_matches=False,  # sold strictly before the home was listed
         )
         return matched.sort_values("row").set_index(homes.index)
@@ -150,15 +162,17 @@ def building_features(homes, history=None):
     X["building_log_ppsf"] = (building["mean"] + level_now).to_numpy()
     X["building_log_price"] = X["building_log_ppsf"] + log_sqft
     X["building_last_log_ppsf"] = (building["detrended"] + level_now).to_numpy()
-    X["building_days_since_sale"] = (building["date_listed"] - building["date_sold"]).dt.days.to_numpy()
+    X["building_days_since_sale"] = (
+        building["date_listed"] - building["date_sold"]
+    ).dt.days.to_numpy()
 
     repeat = earlier_sales(REPEAT_SALE_KEY)
     X["repeat_log_price"] = (repeat["detrended"] + level_now).to_numpy() + log_sqft
-    X["repeat_days_since_sale"] = (repeat["date_listed"] - repeat["date_sold"]).dt.days.to_numpy()
+    X["repeat_days_since_sale"] = (
+        repeat["date_listed"] - repeat["date_sold"]
+    ).dt.days.to_numpy()
     return X
 
-
-# ---- words in the remarks ----
 
 REMARKS_KEYWORD_GROUPS = {
     # Condition: good
@@ -213,7 +227,14 @@ REMARKS_KEYWORD_GROUPS = {
     "studio": r"\bstudio\b",
     "has_street": r"\b(?:way|boulevard|street|avenue|court|drive|road|place|trail|lane|plaza|gardens|crescent)\b",
 }
-CONDITION_POSITIVE_GROUPS = ["turnkey", "premium_kitchen", "renovated", "updated", "clean", "luxury"]
+CONDITION_POSITIVE_GROUPS = [
+    "turnkey",
+    "premium_kitchen",
+    "renovated",
+    "updated",
+    "clean",
+    "luxury",
+]
 CONDITION_NEGATIVE_GROUPS = ["needs_work", "dated"]
 
 
@@ -228,20 +249,26 @@ def remarks_keyword_features(homes):
     X = pd.DataFrame(index=homes.index)
     for name, pattern in REMARKS_KEYWORD_GROUPS.items():
         X[f"remarks_{name}"] = remarks.str.contains(pattern, regex=True).astype(int)
-    X["remarks_condition_score"] = (
-        X[[f"remarks_{g}" for g in CONDITION_POSITIVE_GROUPS]].sum(axis=1)
-        - X[[f"remarks_{g}" for g in CONDITION_NEGATIVE_GROUPS]].sum(axis=1)
-    )
+    X["remarks_condition_score"] = X[
+        [f"remarks_{g}" for g in CONDITION_POSITIVE_GROUPS]
+    ].sum(axis=1) - X[[f"remarks_{g}" for g in CONDITION_NEGATIVE_GROUPS]].sum(axis=1)
     return X
 
 
-TEXT_NUMBER_WORDS = ["one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten"]
+TEXT_NUMBER_WORDS = [
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+]
 TEXT_SCORE_FOLDS = 5
-# Below this many training sales the TF-IDF vocabulary (min_df=10) and the folds
-# are meaningless, so the score is left missing.
 TEXT_SCORE_MIN_TRAIN = 1_000
-# Every model in models.py builds features from the same training sales, so the text
-# model of the latest few training sets is kept instead of being fitted again.
 TEXT_MODEL_CACHE_SIZE = 16
 _TEXT_MODELS = OrderedDict()
 
@@ -294,7 +321,9 @@ def _fit_text_model(train):
 
     ridge = Ridge(alpha=1.0).fit(X_text, y)
     folds = KFold(TEXT_SCORE_FOLDS, shuffle=True, random_state=0)
-    out_of_fold = pd.Series(cross_val_predict(Ridge(alpha=1.0), X_text, y, cv=folds), index=train.index)
+    out_of_fold = pd.Series(
+        cross_val_predict(Ridge(alpha=1.0), X_text, y, cv=folds), index=train.index
+    )
 
     _TEXT_MODELS[key] = (vectorizer, ridge, out_of_fold)
     if len(_TEXT_MODELS) > TEXT_MODEL_CACHE_SIZE:
@@ -315,10 +344,13 @@ def remarks_text_score(homes, history=None):
     vectorizer, ridge, out_of_fold = _fit_text_model(train)
     if history is None:
         return out_of_fold
-    return pd.Series(ridge.predict(vectorizer.transform(_remarks_text(homes))), index=homes.index)
+    return pd.Series(
+        ridge.predict(vectorizer.transform(_remarks_text(homes))), index=homes.index
+    )
 
 
 # ---- the feature tables ----
+
 
 def off_market_features(homes, history=None):
     """Features for homes with no list price."""

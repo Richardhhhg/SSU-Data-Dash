@@ -1,3 +1,4 @@
+# A lot of vibes exist in this code
 import re
 from collections import OrderedDict
 from functools import cache
@@ -9,8 +10,6 @@ import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import Ridge
 from sklearn.model_selection import KFold, cross_val_predict
-
-import features
 
 PROPERTY_TYPES = [
     "Condo Apt",
@@ -289,8 +288,6 @@ TEXT_NUMBER_WORDS = [
     "ten",
 ]
 TEXT_SCORE_FOLDS = 5
-# Below this many training sales the TF-IDF vocabulary (min_df=10) and the folds
-# are meaningless, so the score is left missing.
 TEXT_SCORE_MIN_TRAIN = 1_000
 TEXT_MODEL_CACHE_SIZE = 16
 _TEXT_MODELS = OrderedDict()
@@ -527,7 +524,6 @@ STREET_SUFFIX_ABBREVIATIONS = {
 }
 STREET_SUFFIXES = r"way|boulevard|street|avenue|court|drive|road|place|trail|lane|plaza|gardens|crescent"
 STREET_PATTERN = re.compile(rf"\b([a-z]+) ({STREET_SUFFIXES})\b")
-# Words the LLM sometimes returned in front of a suffix that are not street names.
 NOT_STREET_NAMES = {"quiet", "lined", "york", "nicest", "the", "a"}
 
 
@@ -591,15 +587,9 @@ def community_features(
     return X
 
 
-# Switches for the building and smoothed-lag features below, so compare_features.py can
-# measure each one. Building features cut the XGBoost walk-forward MdAPE from 7.96% to
-# 6.98%; smoothed lags made no difference (7.99%), so they stay off.
 USE_BUILDING_FEATURES = True
 SMOOTH_LAGS = False
 
-# Condo apartments and townhouses in one building share one exact location, so the
-# location and property type identify a building. A repeat sale is the same home sold
-# again: same building or lot, same type, rooms and area.
 BUILDING_KEY = ["latitude", "longitude", "house_type_name"]
 REPEAT_SALE_KEY = BUILDING_KEY + ["bedrooms", "washrooms", "house_area"]
 
