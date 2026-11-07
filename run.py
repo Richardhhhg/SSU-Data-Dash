@@ -25,7 +25,13 @@ TRACKS = ["off_market", "list_aware"]
 VALIDATION_MONTHS = pd.period_range("2025-12", "2026-05", freq="M")
 
 
+def use_cache():
+    """Keep base-model predictions on disk, so reruns and predict reuse validate's work."""
+    models.CACHE_DIR = ROOT / "outputs" / "base_model_cache"
+
+
 def validate():
+    use_cache()
     listings = data.load("listings")
     results = []
     for month in VALIDATION_MONTHS:
@@ -151,6 +157,7 @@ def error_by_price_range(predictions):
 
 
 def predict():
+    use_cache()
     listings = data.load("listings")
     (ROOT / "submissions").mkdir(exist_ok=True)
     for track in TRACKS:

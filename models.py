@@ -12,10 +12,16 @@ The tree models' hyperparameters were tuned with optuna in notebooks/xxbonkxx/mo
 (copied from best_params.py there).
 """
 
+import hashlib
 import time
+from pathlib import Path
 
+import catboost
+import lightgbm
 import numpy as np
 import pandas as pd
+import sklearn
+import xgboost
 from catboost import CatBoostRegressor
 from catboost.utils import get_gpu_device_count
 from lightgbm import LGBMRegressor
@@ -181,10 +187,42 @@ TRACK_PARAMS = {
 
 VERBOSE = True
 
+# Base-model predictions are cached in memory and, when CACHE_DIR is set, on disk.
+# Walk-forward validation asks for the same ones many times (month M's final models
+# are month M+1's out-of-fold models), and predict reuses validate's out-of-fold months.
+# A cache entry is keyed by the code, the library versions and the data, so editing
+# models.py, features.py or data.py starts afresh. Delete the folder to clear it.
+CACHE_DIR = None
+_BASE_LOG_PREDICTIONS = {}
+
 
 def log(message):
     if VERBOSE:
         print(message, flush=True)
+
+
+def _fingerprint(*parts):
+    digest = hashlib.sha256()
+    for part in parts:
+        digest.update(part if isinstance(part, bytes) else str(part).encode())
+        digest.update(b"\0")
+    return digest.hexdigest()[:32]
+
+
+def _table_fingerprint(df):
+    """Changes whenever any value, row order or column of `df` changes."""
+    rows = pd.util.hash_pandas_object(df, index=False).to_numpy()
+    return _fingerprint(rows.tobytes(), list(df.columns))
+
+
+def _code_fingerprint():
+    folder = Path(__file__).parent
+    sources = [(folder / name).read_bytes() for name in ("models.py", "features.py", "data.py")]
+    versions = [m.__version__ for m in (np, pd, sklearn, xgboost, lightgbm, catboost)]
+    return _fingerprint(*sources, *versions)
+
+
+CODE_FINGERPRINT = _code_fingerprint()
 
 
 def make_model(track):
@@ -387,10 +425,9 @@ class MetaModel:
         for month in months:
             earlier = train[train["date_sold"] < month.start_time]
             homes = train[train["date_sold"].dt.to_period("M") == month]
-            base_models = self.fit_base_models(earlier, f"out-of-fold {month}")
             log_predictions.append(
                 self.base_log_predictions(
-                    base_models, data.hide_answers(homes, self.track)
+                    earlier, data.hide_answers(homes, self.track), f"out-of-fold {month}"
                 )
             )
             log_prices.append(np.log(homes["sold_price"]))
@@ -398,14 +435,33 @@ class MetaModel:
         self.ridge = Ridge(alpha=TRACK_PARAMS[self.track]["meta_alpha"]).fit(
             pd.concat(log_predictions), pd.concat(log_prices)
         )
-        self.base_models = self.fit_base_models(train, "final")
+        self.train = train  # the final base models are trained when predict needs them
         log(f"{self.track} meta model trained in {time.perf_counter() - start:.0f}s")
         return self
 
     def predict(self, homes):
         return np.exp(
-            self.ridge.predict(self.base_log_predictions(self.base_models, homes))
+            self.ridge.predict(self.base_log_predictions(self.train, homes, "final"))
         )
+
+    def base_log_predictions(self, train, homes, label):
+        """Log price of `homes` predicted by each base model trained on `train`."""
+        train_key = _table_fingerprint(train)
+        key = _fingerprint(CODE_FINGERPRINT, self.track, train_key, _table_fingerprint(homes))
+        path = None if CACHE_DIR is None else Path(CACHE_DIR) / f"{key}.parquet"
+        if key not in _BASE_LOG_PREDICTIONS and path is not None and path.exists():
+            _BASE_LOG_PREDICTIONS[key] = pd.read_parquet(path)
+        if key not in _BASE_LOG_PREDICTIONS:
+            # Keep the last trained base models: predict may be called again on other homes.
+            if getattr(self, "fitted_train_key", None) != train_key:
+                self.fitted_base_models = self.fit_base_models(train, label)
+                self.fitted_train_key = train_key
+            predictions = self.predict_base_models(self.fitted_base_models, homes)
+            _BASE_LOG_PREDICTIONS[key] = predictions.reset_index(drop=True)
+            if path is not None:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                _BASE_LOG_PREDICTIONS[key].to_parquet(path)
+        return _BASE_LOG_PREDICTIONS[key].set_axis(homes.index)
 
     def fit_base_models(self, train, label):
         base_models = {}
@@ -421,7 +477,7 @@ class MetaModel:
         return base_models
 
     @staticmethod
-    def base_log_predictions(base_models, homes):
+    def predict_base_models(base_models, homes):
         return pd.DataFrame(
             {name: np.log(model.predict(homes)) for name, model in base_models.items()},
             index=homes.index,

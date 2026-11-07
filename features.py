@@ -352,8 +352,28 @@ def remarks_text_score(homes, history=None):
 # ---- the feature tables ----
 
 
+TRAINING_FEATURE_CACHE_SIZE = 2
+_TRAINING_FEATURES = OrderedDict()
+
+
 def off_market_features(homes, history=None):
-    """Features for homes with no list price."""
+    """Features for homes with no list price.
+
+    Training features (no `history`) are kept for the last few training sets, since
+    every base model of both tracks builds the same table from the same sales."""
+    if history is not None:
+        return _off_market_features(homes, history)
+    key = _training_key(homes)
+    if key in _TRAINING_FEATURES:
+        _TRAINING_FEATURES.move_to_end(key)
+    else:
+        _TRAINING_FEATURES[key] = _off_market_features(homes)
+        if len(_TRAINING_FEATURES) > TRAINING_FEATURE_CACHE_SIZE:
+            _TRAINING_FEATURES.popitem(last=False)
+    return _TRAINING_FEATURES[key].copy()
+
+
+def _off_market_features(homes, history=None):
     X = pd.DataFrame(index=homes.index)
     X["square_feet"] = np.log(square_feet(homes["house_area"]) + 1)
     X["bedrooms"] = homes["bedrooms"]
