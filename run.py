@@ -23,6 +23,8 @@ TRACKS = ["off_market", "list_aware"]
 # Walk-forward validation: each of these months is predicted by models trained only
 # on the sales before that month, the same way the real test works.
 VALIDATION_MONTHS = pd.period_range("2025-12", "2026-05", freq="M")
+# Trained models: validation/<month>/<track>.joblib and test/<track>.joblib.
+MODELS_DIR = ROOT / "outputs" / "models"
 
 
 def use_cache():
@@ -38,7 +40,9 @@ def validate():
         train = listings[listings["date_sold"] < month.start_time]
         homes = listings[listings["date_sold"].dt.to_period("M") == month]
         for track in TRACKS:
-            model = models.make_model(track).fit(train)
+            model = models.fit_or_load(
+                track, train, MODELS_DIR / "validation" / str(month) / f"{track}.joblib"
+            )
             predicted = model.predict(data.hide_answers(homes, track))
             results.append(pd.DataFrame({
                 "ml_num": homes["ml_num"], "track": track, "month": str(month),
@@ -162,7 +166,7 @@ def predict():
     (ROOT / "submissions").mkdir(exist_ok=True)
     for track in TRACKS:
         homes = data.load(track)
-        model = models.make_model(track).fit(listings)
+        model = models.fit_or_load(track, listings, MODELS_DIR / "test" / f"{track}.joblib")
         predicted = model.predict(homes)
         path = ROOT / "submissions" / f"submission_{track}.csv"
         pd.DataFrame({"ml_num": homes["ml_num"], "predicted_price": np.round(predicted)}).to_csv(path, index=False)
