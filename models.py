@@ -236,25 +236,21 @@ def fit_or_load(track, train, path):
     """make_model(track).fit(train), saved to `path` and loaded from there next time.
 
     The saved model holds the meta model and the final base models that predict uses.
-    It is only loaded if it was trained on the same `train` with the same code and
-    library versions; otherwise it is trained again and `path` is overwritten.
+    Whenever `path` exists it is loaded as is, without checking that it was trained on
+    this `train` or with this code: delete it after changing either, to train again.
     """
     path = Path(path)
-    key = _fingerprint(CODE_FINGERPRINT, track, _table_fingerprint(train))
     if path.exists():
-        saved = joblib.load(path)
-        if saved["key"] == key:
-            model = saved["model"]
-            if isinstance(model, MetaModel):
-                model.attach_train(train)
-            log(f"Loaded {track} model from {path}")
-            return model
-        log(f"{path} was trained on other data or code: training again")
+        model = joblib.load(path)["model"]
+        if isinstance(model, MetaModel):
+            model.attach_train(train)
+        log(f"Loaded {track} model from {path}")
+        return model
     model = make_model(track).fit(train)
     if isinstance(model, MetaModel):
         model.fit_final_base_models()
     path.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump({"key": key, "model": model}, path)
+    joblib.dump({"model": model}, path)
     log(f"Saved {track} model to {path}")
     return model
 
@@ -484,6 +480,9 @@ class MetaModel:
         self.train = train
         for model in getattr(self, "fitted_base_models", {}).values():
             model.train = train
+        # The table may hash differently on another machine: keep the loaded base models.
+        if hasattr(self, "fitted_base_models"):
+            self.fitted_train_key = _table_fingerprint(train)
         return self
 
     def fit_final_base_models(self):

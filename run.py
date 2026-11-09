@@ -23,7 +23,8 @@ TRACKS = ["off_market", "list_aware"]
 # Walk-forward validation: each of these months is predicted by models trained only
 # on the sales before that month, the same way the real test works.
 VALIDATION_MONTHS = pd.period_range("2025-12", "2026-05", freq="M")
-# Trained models: validation/<month>/<track>.joblib and test/<track>.joblib.
+# Trained models: validation/<month>/<track>.joblib and test/<track>.joblib. They are
+# loaded whenever they exist: delete the folder after changing the code or the data.
 MODELS_DIR = ROOT / "outputs" / "models"
 
 
