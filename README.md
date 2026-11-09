@@ -3,6 +3,7 @@
 Start with the case handout, [`handout.md`](handout.md), and the judging rubric, [`rubric.md`](rubric.md).
 
 Two tracks:
+
 - **Off-market:** value a home with no list price.
 - **List-aware:** predict a listed home's sale price, knowing its list price.
 
@@ -10,6 +11,12 @@ Train on 150,000 sales (January 2021 to May 2026). Predict homes that sold June 
 
 **Data:** [huggingface.co/datasets/Baliyang/SSU_data_dash](https://huggingface.co/datasets/Baliyang/SSU_data_dash).
 All of it is synthetic.
+
+## Hardware and Running the Code:
+
+We trained the models on cpu using a machine with an intel i7-12700KF CPU. This took roughly 1.5 hours. To speed up the prediction, we also saved model weights in outputs/models.
+
+The method to run validation, report generation, and prediction all remain unchanged from the starter code.
 
 ## Setup
 
@@ -49,6 +56,7 @@ validation error with your hidden-test error.
 ## Submission
 
 One PDF report (template: `report/report.tex`, 4 pages max) that links to:
+
 1. your video on YouTube, 5 minutes max (unlisted is fine, not private);
 2. your GitHub repository (public, or shared with the organisers), holding your code and two files:
 
