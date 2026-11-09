@@ -10,7 +10,6 @@ pytest==8.4.2
 statsmodels
 spacy
 seaborn
-# Saved models in outputs/models are pickles: load them with the same minor versions.
 joblib~=1.6.0
 xgboost~=3.4.1
 lightgbm~=4.7.0
