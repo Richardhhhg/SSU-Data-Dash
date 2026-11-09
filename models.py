@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 import catboost
+import joblib
 import lightgbm
 import numpy as np
 import pandas as pd
@@ -231,6 +232,33 @@ def make_model(track):
     return MetaModel(track)
 
 
+def fit_or_load(track, train, path):
+    """make_model(track).fit(train), saved to `path` and loaded from there next time.
+
+    The saved model holds the meta model and the final base models that predict uses.
+    It is only loaded if it was trained on the same `train` with the same code and
+    library versions; otherwise it is trained again and `path` is overwritten.
+    """
+    path = Path(path)
+    key = _fingerprint(CODE_FINGERPRINT, track, _table_fingerprint(train))
+    if path.exists():
+        saved = joblib.load(path)
+        if saved["key"] == key:
+            model = saved["model"]
+            if isinstance(model, MetaModel):
+                model.attach_train(train)
+            log(f"Loaded {track} model from {path}")
+            return model
+        log(f"{path} was trained on other data or code: training again")
+    model = make_model(track).fit(train)
+    if isinstance(model, MetaModel):
+        model.fit_final_base_models()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    joblib.dump({"key": key, "model": model}, path)
+    log(f"Saved {track} model to {path}")
+    return model
+
+
 def make_features_for(track):
     """The feature function of a track: list-aware homes also have their list price."""
     return (
@@ -311,6 +339,10 @@ class TreeModel:
 
     def predict(self, homes):
         return np.exp(self.regressor.predict(self.features_to_value(homes)))
+
+    def __getstate__(self):
+        # The training table is not saved with the model: MetaModel.attach_train puts it back.
+        return {name: value for name, value in self.__dict__.items() if name != "train"}
 
     def training_features(self, train):
         self.train = train
@@ -444,19 +476,39 @@ class MetaModel:
             self.ridge.predict(self.base_log_predictions(self.train, homes, "final"))
         )
 
+    def __getstate__(self):
+        return {name: value for name, value in self.__dict__.items() if name != "train"}
+
+    def attach_train(self, train):
+        """Give a loaded model back the training table it was fitted on."""
+        self.train = train
+        for model in getattr(self, "fitted_base_models", {}).values():
+            model.train = train
+        return self
+
+    def fit_final_base_models(self):
+        """Train now the base models that predict would otherwise train when needed."""
+        self.base_models_for(self.train, "final")
+        return self
+
+    def base_models_for(self, train, label):
+        # Keep the last trained base models: predict may be called again on other homes.
+        train_key = _table_fingerprint(train)
+        if getattr(self, "fitted_train_key", None) != train_key:
+            self.fitted_base_models = self.fit_base_models(train, label)
+            self.fitted_train_key = train_key
+        return self.fitted_base_models
+
     def base_log_predictions(self, train, homes, label):
         """Log price of `homes` predicted by each base model trained on `train`."""
-        train_key = _table_fingerprint(train)
-        key = _fingerprint(CODE_FINGERPRINT, self.track, train_key, _table_fingerprint(homes))
+        key = _fingerprint(
+            CODE_FINGERPRINT, self.track, _table_fingerprint(train), _table_fingerprint(homes)
+        )
         path = None if CACHE_DIR is None else Path(CACHE_DIR) / f"{key}.parquet"
         if key not in _BASE_LOG_PREDICTIONS and path is not None and path.exists():
             _BASE_LOG_PREDICTIONS[key] = pd.read_parquet(path)
         if key not in _BASE_LOG_PREDICTIONS:
-            # Keep the last trained base models: predict may be called again on other homes.
-            if getattr(self, "fitted_train_key", None) != train_key:
-                self.fitted_base_models = self.fit_base_models(train, label)
-                self.fitted_train_key = train_key
-            predictions = self.predict_base_models(self.fitted_base_models, homes)
+            predictions = self.predict_base_models(self.base_models_for(train, label), homes)
             _BASE_LOG_PREDICTIONS[key] = predictions.reset_index(drop=True)
             if path is not None:
                 path.parent.mkdir(parents=True, exist_ok=True)
